@@ -1,0 +1,41 @@
+# Stage 1: Dependencies and source checkout
+FROM ubuntu:22.04 AS deps
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt update && apt install -y \
+    build-essential cmake git wget gnuradio \
+    libboost-all-dev libfftw3-dev libsctp-dev libmbedtls-dev \
+    libconfig++-dev libzmq3-dev libuhd-dev \
+    python3 python3-pip python3-mako \ 
+    tcpdump iputils-ping
+
+WORKDIR /srsran
+
+# Clone source
+RUN git clone https://github.com/srsran/srsRAN_4G.git
+WORKDIR /srsran/srsRAN_4G
+
+# Stage 2: Build with patch
+FROM deps AS build-normal
+
+RUN mkdir build && \
+    cd build && \
+    cmake ../ -DENABLE_TESTS=OFF -DENABLE_DOC=OFF -DENABLE_EXAMPLES=OFF -DENABLE_ZMQ=ON -DENABLE_SRSUE=ON -DENABLE_SRSENB=ON -DENABLE_SRSEPC=ON && \
+    make -j$(nproc)
+
+# Update dynamic linker
+RUN ldconfig
+
+# Copy the built binaries to /usr/local/bin
+RUN cd build && make install && \
+./srsran_install_configs.sh user
+
+# Update dynamic linker
+RUN ldconfig
+
+RUN apt update && apt install -y iproute2 && \
+    apt-get autoremove && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Run commands with line buffered standard output
+# (-> get log messages in real time)
+ENTRYPOINT [ "stdbuf", "-o", "L" ]

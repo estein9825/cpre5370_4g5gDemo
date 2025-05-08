@@ -1,0 +1,690 @@
+services:
+  # Normal Standard 4G Implmentation
+  4g-epc-normal:
+    container_name: srsran_4g_epc-normal
+    build:
+      context: .  
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["4g-normal", "4g-all", "4g-mitm"]
+    command:
+      - srsepc
+      - --mme.mme_bind_addr=10.54.1.2
+      - --spgw.gtpu_bind_addr=10.54.1.2
+      - --pcap.enable=true
+    networks:
+      ran_4g_rf:
+        ipv4_address: 10.54.1.2  # Connects to both networks
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    devices:
+      - /dev/net/tun
+    ports:
+      - "2152:2152/udp"     # GTP port for 4G (SGW/PGW)
+    healthcheck:
+      test: ["CMD-SHELL", "nc -uz srsran_4g_epc-normal 2152"]  # Reference container name
+      interval: 10s
+      retries: 3
+
+  4g-enb-normal:
+    container_name: srsran_4g_enb-normal
+    build:
+      context: .  
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["4g-normal", "4g-all"]
+    command:
+      - srsenb
+      - --enb.enb_id=0X19B
+      - --enb.mme_addr=10.54.1.2
+      - --enb.gtp_bind_addr=10.54.1.3
+      - --enb.s1c_bind_addr=10.54.1.3
+      - --rf.device_name=zmq
+      - --rf.device_args=fail_on_disconnect=true,tx_port=tcp://*:2000,rx_port=tcp://srsran_4g_ue-normal:2001,id=enb-normal,base_srate=23.04e6
+    networks:
+      ran_4g_rf:
+        ipv4_address: 10.54.1.3
+    cap_add:
+      - SYS_NICE
+    healthcheck:
+      test: ["CMD-SHELL", "nc -uz srsran_4g_enb-normal 2152"]  # Reference container name
+      interval: 10s
+      retries: 3
+    
+  4g-ue-normal:
+    container_name: srsran_4g_ue-normal
+    build:
+      context: .
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["4g-ue-normal", "4g-all"]
+    command:
+      - srsue
+      - --log.all_level=debug
+      - --pcap.enable=mac,mac_nr,nas
+      - --rf.device_name=zmq
+      - --rf.device_args=tx_port=tcp://*:2001,rx_port=tcp://srsran_4g_enb-normal:2000,id=ue-normal,base_srate=23.04e6
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    devices:
+      - /dev/net/tun
+    networks:
+      ran_4g_rf:
+        ipv4_address: 10.54.1.4
+    depends_on:
+      - 4g-enb-normal
+
+  # 4G MITM Demonstration
+  4g-fake-mme:
+    container_name: srsran_4g_fake-mme
+    build:
+      context: .
+      dockerfile: Dockerfile.fake-mme  # This is your new Python-based stub
+    profiles: ["4g-mitm-ignore", "4g-rogue", "4g-all"]
+    networks:
+      ran_4g_core:
+        ipv4_address: 10.53.1.100
+
+  4g-mitm-relay:
+    container_name: srsran_4g_mitm-relay
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    networks:
+      ran_4g_rf:
+        ipv4_address: 10.54.1.99
+    cap_add:
+      - NET_ADMIN
+    command: >
+      socat -v -T10 sctp4-listen:36412,fork sctp-connect:10.54.1.2:36412
+    profiles: ["4g-mitm", "4g-rogue", "4g-all"]
+
+  
+  4g-enb-mitm:
+    container_name: srsran_4g_enb-mitm
+    build:
+      context: .
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["4g-mitm", "4g-all"]
+    command:
+      - srsenb
+      - --enb.enb_id=0X19C
+      - --enb.mme_addr=10.54.1.99   # SCTP Host gateway (route -n from inside the ENB container)
+      - --enb.gtp_bind_addr=10.54.1.5
+      - --enb.s1c_bind_addr=10.54.1.5
+      - --rf.device_name=zmq
+      - --rf.device_args=fail_on_disconnect=true,tx_port=tcp://*:2000,rx_port=tcp://srsran_4g_ue-mitm:2001,id=enb-mitm,base_srate=23.04e6
+    networks:
+      ran_4g_rf:
+        ipv4_address: 10.54.1.5
+    cap_add:
+      - SYS_NICE
+    healthcheck:
+      test: ["CMD-SHELL", "nc -uz srsran_4g_enb-mitm 2152"]  # Reference container name
+      interval: 10s
+      retries: 3
+    # depends_on:
+    #   - 4g-mitm-relay
+
+  
+  4g-ue-mitm:
+    container_name: srsran_4g_ue-mitm
+    build:
+      context: .
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["4g-ue-mitm", "4g-all"]
+    command:
+      - srsue
+      - --log.all_level=debug
+      - --pcap.enable=mac,mac_nr,nas
+      - --rf.device_name=zmq
+      - --rf.device_args=tx_port=tcp://*:2001,rx_port=tcp://srsran_4g_enb-mitm:2000,id=ue-mitm,base_srate=23.04e6
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    devices:
+      - /dev/net/tun
+    networks:
+      ran_4g_rf:
+        ipv4_address: 10.54.1.6
+    depends_on:
+      - 4g-enb-mitm
+
+  # 4G Rogue Demonstration
+  4g-enb-rogue:
+    container_name: srsran_4g_enb-rogue
+    build:
+      context: .  
+      dockerfile: Dockerfile.4g-bypass-s1
+      target: build-patched
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["4g-rogue", "4g-storm", "4g-all"]
+    command:
+      - srsenb
+      - --enb.enb_id=0X19D
+      # - --enb.mme_addr=172.0.0.10    # Relay to fake MME
+      - --enb.mme_addr=10.53.1.1    # SCTP Host gateway (route -n from inside the ENB container)
+      - --enb.gtp_bind_addr=10.53.1.7
+      - --enb.s1c_bind_addr=10.53.1.7
+      - --rf.device_name=zmq
+      - --rf.device_args=fail_on_disconnect=true,tx_port=tcp://*:2000,rx_port=tcp://srsran_4g_ue-rogue:2001,id=enb-rogue,base_srate=23.04e6
+      - --log.filename=stdout
+      - --log.all_level=info
+    networks:
+      ran_4g_core:
+        ipv4_address: 10.53.1.7
+      ran_4g_rf:
+        ipv4_address: 10.54.1.7
+    cap_add:
+      - SYS_NICE
+    healthcheck:
+      test: ["CMD-SHELL", "nc -uz srsran_4g_enb-rogue 2152"]  # Reference container name
+      interval: 10s
+      retries: 3
+  
+  4g-ue-rogue:
+    container_name: srsran_4g_ue-rogue
+    build:
+      context: .
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["4g-ue-rogue", "4g-all"]
+    command:
+      - srsue
+      - --log.all_level=debug
+      - --pcap.enable=mac,mac_nr,nas
+      - --rf.device_name=zmq
+      - --rf.device_args=tx_port=tcp://*:2001,rx_port=tcp://srsran_4g_enb-rogue:2000,id=ue-rogue,base_srate=23.04e6
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    devices:
+      - /dev/net/tun
+    networks:
+      ran_4g_rf:
+        ipv4_address: 10.54.1.8
+    depends_on:
+      - 4g-enb-rogue
+  
+  4g-ue-storm:
+    build:
+      context: .
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["4g-storm"]
+    command:
+      - srsue
+      - --log.all_level=debug
+      - --pcap.enable=mac,mac_nr,nas
+      - --rf.device_name=zmq
+      - --rf.device_args=tx_port=tcp://*:2001,rx_port=tcp://srsran_4g_enb-rogue:2000,id=ue-storm,base_srate=23.04e6
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    devices:
+      - /dev/net/tun
+    depends_on:
+      - 4g-enb-rogue
+
+  # 5G Core (Open5GS) - Only on ran_5g
+  5g-core-normal:
+    container_name: srsran_5g_core-normal
+    build:
+      # context: open5gs
+      context: /Users/ethanstein/programming/srsRAN_Project/docker/open5gs
+      target: open5gs
+      args:
+        OS_VERSION: "22.04"
+        OPEN5GS_VERSION: "v2.7.0"
+    privileged: true
+    profiles: ["5g-normal", "5g-all", "5g-mitm"]
+    ports:
+      - "9999:9999/tcp"
+      # - "38412:38412/sctp"
+      # - "2152:2152/udp"
+    command:
+      - 5gc
+      - -c open5gs-5gc.yml
+    healthcheck:
+      test: [ "CMD-SHELL", "nc -uz srsran_5g_core-normal 2152" ]
+      interval: 3s
+      timeout: 1s
+      retries: 60
+    environment:
+      - MONGODB_IP=127.0.0.1
+      - OPEN5GS_IP=10.56.1.2
+      - UE_IP_BASE=10.56.1
+      - UPF_ADVERTISE_IP=10.56.1.2
+      - DEBUG=true
+      - SUBSCRIBER_DB=subscriber_db.csv
+      - NETWORK_NAME_FULL=docker_ran_5g_rf
+      - NETWORK_NAME_SHORT=docker_ran_5g_rf
+    networks:
+      ran_5g_rf:
+        ipv4_address: 10.56.1.2
+    volumes:
+      - ./open5gs-config:/config  # Mount config directory for custom 5G configurations
+      - ./subscriber_db.csv:/open5gs/subscriber_db.csv
+
+  5g-gnb-normal:
+    container_name: srsran_5g_gnb-normal
+    build:
+      context: .
+      dockerfile: Dockerfile.5g-gnb
+      args:
+        OS_VERSION: "24.04"
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["5g-normal", "5g-all", "5g-ue-normal"]
+    cap_add:
+      - SYS_NICE
+      - CAP_SYS_PTRACE
+    networks:
+      ran_5g_rf:
+        ipv4_address: 10.56.1.3
+    command:
+      - gnb
+      - -c
+      - /config.yaml
+      - cu_cp
+      - amf
+      - --addr
+      - 10.56.1.2
+      - --bind_addr
+      - 10.56.1.3
+      - --supported_tracking_areas
+      - '{tac: 7, plmn_list: [{plmn: "00101", tai_slice_support_list: [{sst: 1}]}]}'
+      - ru_sdr
+      - --device_args
+      - tx_port=tcp://*:2000,rx_port=tcp://srsran_5g_ue-normal:2001,base_srate=11.52e6
+      - cell_cfg
+      - --plmn
+      - "00101"
+      - --tac
+      - "7"
+      - log
+      - --all_level
+      - warning
+      - --ngap_level
+      - debug     # Shows failed NG Setup or Registration reject
+      - --sec_level
+      - info      # Shows auth token generation and failure
+      - --rrc_level
+      - debug        # UE’s perspective of registration attempt
+      - pcap
+      - --ngap_enable
+      - "true"
+      - --n3_enable
+      - "true"
+    healthcheck:
+      test: ["CMD", "pgrep", "gnb"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      5g-core-normal:
+          condition: service_healthy
+    volumes:
+    - /etc/srsran/gnb.yml:/config.yaml
+    - /tmp/pcaps:/tmp
+
+  5g-ue-normal:
+    container_name: srsran_5g_ue-normal
+    build:
+      context: .
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    cpuset: "8,9,10,11"
+    profiles: ["5g-ue-normal", "5g-all"]
+    command:
+      - srsue
+      - --rf.device_args=tx_port=tcp://*:2001,rx_port=tcp://srsran_5g_gnb-normal:2000,base_srate=11.52e6
+      - --usim.algo=milenage
+      - --usim.k=
+      - --usim.opc=
+      - --usim.imsi=
+      - --usim.imei=
+    networks:
+      ran_5g_rf:
+        ipv4_address: 10.56.1.4
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    devices:
+      - /dev/net/tun
+    depends_on:
+      5g-gnb-normal:
+          condition: service_healthy
+    volumes:
+    - /etc/srsran/ue.conf:/root/.config/srsran/ue.conf
+
+  5g-fake-amf:
+    container_name: srsran_5g_fake-amf
+    build:
+      context: .
+      dockerfile: Dockerfile.fake-amf  # This is your new Python-based stub
+    profiles: ["5g-mitm-no", "5g-rogue", "5g-all"]
+    networks:
+      ran_5g_rf:
+        ipv4_address: 10.56.1.100
+
+  5g-mitm-relay:
+    container_name: srsran_5g_mitm-relay
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    # network_mode: "host"  # <--- Critical for SCTP
+    networks:
+      ran_5g_rf:
+        ipv4_address: 10.56.1.99
+    cap_add:
+      - NET_ADMIN
+    command: >
+      socat -v -T10 sctp4-listen:38412,fork sctp-connect:10.56.1.2:38412
+    profiles: ["5g-mitm", "5g-rogue", "5g-all"]
+  
+  5g-gnb-mitm:
+    container_name: srsran_5g_gnb-mitm
+    build:
+      context: .
+      dockerfile: Dockerfile.5g-gnb
+      args:
+        OS_VERSION: "24.04"
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["5g-mitm", "5g-all"]
+    cap_add:
+      - SYS_NICE
+      - CAP_SYS_PTRACE
+    # network_mode: "host"
+    networks: 
+      # ran_5g_core:
+      #   ipv4_address: 10.55.1.7
+      ran_5g_rf:
+        ipv4_address: 10.56.1.7
+    command:
+      - gnb
+      - -c
+      - /config.yaml
+      - cu_cp
+      - amf
+      - --addr
+      - 10.56.1.99
+      - --bind_addr
+      - 10.56.1.7
+      - --supported_tracking_areas
+      - '{tac: 7, plmn_list: [{plmn: "00101", tai_slice_support_list: [{sst: 1}]}]}'
+      - ru_sdr
+      - --device_args
+      - tx_port=tcp://*:2000,rx_port=tcp://10.56.1.8:2001,base_srate=11.52e6
+      - cell_cfg
+      - --plmn
+      - "00101"
+      - --tac
+      - "7"
+      - log
+      - --all_level
+      - info
+      - --ngap_level
+      - debug     # Shows failed NG Setup or Registration reject
+      - --sec_level
+      - debug      # Shows auth token generation and failure
+      - --rrc_level
+      - info        # UE’s perspective of registration attempt
+      - pcap
+      - --ngap_enable
+      - "true"
+      - --n3_enable
+      - "true"
+    healthcheck:
+      test: ["CMD", "pgrep", "gnb"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # depends_on:
+    # - 5g-mitm-relay
+    volumes:
+    - ./gnb.yml:/config.yaml
+    # - /tmp/pcaps:/tmp
+
+  5g-ue-mitm:
+    container_name: srsran_5g_ue-mitm
+    build:
+      context: .
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["5g-ue-mitm", "5g-all"]
+    command:
+      - srsue
+      - --rf.device_args=tx_port=tcp://*:2001,rx_port=tcp://10.56.1.7:2000,base_srate=11.52e6
+      - --usim.algo=milenage
+      - --usim.k=
+      - --usim.opc=
+      - --usim.imsi=
+      - --usim.imei=
+      - --log.rrc_level=debug
+      - --log.phy_level=debug
+      - --log.mac_level=debug
+      - --log.nas_level=debug
+    networks:
+      ran_5g_rf:
+        ipv4_address: 10.56.1.8
+    # network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    devices:
+      - /dev/net/tun
+    depends_on:
+      5g-gnb-mitm:
+          condition: service_healthy
+    volumes:
+    - /etc/srsran/ue.conf:/root/.config/srsran/ue.conf
+
+
+  # 5G Rogue gNB Demonstration (Misconfigured)
+  5g-gnb-rogue:
+    container_name: srsran_5g_gnb-rogue
+    build:
+      context: .
+      dockerfile: Dockerfile.5g-gnb-fail-auth
+      args:
+        OS_VERSION: "24.04"
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["5g-rogue", "5g-all"]
+    cap_add:
+      - SYS_NICE
+      - CAP_SYS_PTRACE
+    networks:
+      ran_5g_core:
+        ipv4_address: 10.55.1.5
+      ran_5g_rf:
+        ipv4_address: 10.56.1.5
+    command:
+      - gnb
+      - -c
+      - /config.yaml
+      - cu_cp
+      - amf
+      - --addr
+      - 10.55.1.2
+      - --bind_addr
+      - 10.55.1.4
+      - --supported_tracking_areas
+      - '{tac: 7, plmn_list: [{plmn: "00101", tai_slice_support_list: [{sst: 1}]}]}'
+      - ru_sdr
+      - --device_args
+      - tx_port=tcp://*:2000,rx_port=tcp://srsran_5g_ue-normal:2001,base_srate=11.52e6
+      - cell_cfg
+      - --plmn
+      - "00101"
+      - --tac
+      - "7"
+      - log
+      - --all_level
+      - warning
+      - --ngap_level
+      - debug     # Shows failed NG Setup or Registration reject
+      - --sec_level
+      - debug      # Shows auth token generation and failure
+      - --rrc_level
+      - info        # UE’s perspective of registration attempt
+      - pcap
+      - --ngap_enable
+      - "true"
+      - --n3_enable
+      - "true"
+    healthcheck:
+      test: ["CMD", "pgrep", "gnb"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      5g-mitm-relay:
+          condition: service_healthy
+    volumes:
+    - /etc/srsran/gnb.yml:/config.yaml
+    - /tmp/pcaps:/tmp
+
+  5g-ue-rogue:
+    container_name: srsran_5g_ue-rogue
+    build:
+      context: .
+      dockerfile: Dockerfile.4g
+    stdin_open: true
+    tty: true
+    privileged: true
+    profiles: ["5g-ue-rogue", "5g-all"]
+    command:
+      - srsue
+      - --rf.device_args=tx_port=tcp://*:2001,rx_port=tcp://srsran_5g_gnb-rogue:2000,base_srate=11.52e6
+      - --usim.algo=milenage
+      - --usim.k=
+      - --usim.opc=
+      - --usim.imsi=
+      - --usim.imei=
+    networks:
+      ran_5g_rf:
+        ipv4_address: 10.56.1.6
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    devices:
+      - /dev/net/tun
+    depends_on:
+      5g-gnb-rogue:
+          condition: service_healthy
+    volumes:
+    - ./ue.conf:/root/.config/srsran/ue.conf
+
+  # # 4G connector so can talk to 5G core
+  # 4g-ngenb:
+  #   container_name: srsran_4g_ngenb
+  #   image: srsran/srsran_project:latest
+  #   stdin_open: true
+  #   tty: true
+  #   privileged: true
+  #   profiles: ["4g-on-5g"]
+  #   networks:
+  #     ran_5g:
+  #   volumes:
+  #     - ./ngenb.yaml:/config/ngenb.yaml
+  #   command: |
+  #     /bin/bash -c "
+  #     echo 'Starting NG-eNB (4G over NGAP to 5GC)...';
+  #     ./build/apps/gnb/gnb \
+  #     --config-file /config/ngenb.yaml
+  #     "
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "nc -z srsran_5g_core 38412"]
+  #     interval: 10s
+  #     retries: 3
+  #   depends_on:
+  #     - 5gc
+
+  # # 4G UE talking to 5G core through ngenb
+  # 4g-ue-5g-1:
+  #   container_name: srsran_4g_ue-5g-1
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.4g
+  #   stdin_open: true
+  #   tty: true
+  #   privileged: true
+  #   profiles: ["4g-on-5g"]
+  #   command:
+  #     - srsue
+  #     - --pcap.enable=mac,mac_nr,nas
+  #     - --rf.device_name=zmq
+  #     - --rf.device_args=tx_port=tcp://*:2001,rx_port=tcp://srsran_4g_ngenb:2000,id=ue5g1,base_srate=23.04e6
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - SYS_NICE
+  #   devices:
+  #       - /dev/net/tun
+  #   networks:
+  #     ran_5g:
+  #   healthcheck:
+  #     test: [ "CMD-SHELL", "nc -uz srsran_5g_core 2152" ]
+  #     interval: 10s
+  #     retries: 3
+  #   volumes:
+  #     - ./5g_ue.conf:/root/.config/srsran/ue.conf
+  #   depends_on:
+  #     - 4g-ngenb
+
+networks:
+  ran_4g_core:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.53.1.0/24  # IP range for the 4G network
+  ran_4g_rf:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.54.1.0/24  # IP range for the 4G network
+
+  ran_5g_core:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.55.1.0/24  # IP range for the 5G network
+  ran_5g_rf:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.56.1.0/24  # IP range for the 5G network
+
+volumes:
+  influxdb-storage:
+  grafana-storage:
+  gnb-storage:

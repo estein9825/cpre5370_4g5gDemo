@@ -1,0 +1,58 @@
+# Stage 1: Dependencies and source checkout
+FROM ubuntu:22.04 AS deps
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt update && apt install -y \
+    build-essential cmake git wget gnuradio \
+    libboost-all-dev libfftw3-dev libsctp-dev libmbedtls-dev \
+    libconfig++-dev libzmq3-dev libuhd-dev \
+    python3 python3-pip python3-mako \
+    tcpdump iputils-ping
+
+WORKDIR /srsran
+
+# Clone source
+RUN git clone https://github.com/srsran/srsRAN_4G.git
+WORKDIR /srsran/srsRAN_4G
+
+# Stage 2: Build with patch
+FROM deps AS build-patched
+
+COPY s1ap.cc.patched srsenb/src/stack/s1ap/s1ap.cc
+RUN grep -q 'void s1ap::inject_fake_initial_ue_message_once' srsenb/src/stack/s1ap/s1ap.cc || (echo 'ERROR: s1ap patch not applied!' && exit 1)
+COPY s1ap.h.patched srsenb/hdr/stack/s1ap/s1ap.h
+RUN grep -q 'void inject_fake_initial_ue_message_once(uint16_t rnti);' srsenb/hdr/stack/s1ap/s1ap.h || (echo 'ERROR: s1ap header patch not applied!' && exit 1)
+COPY rrc.cc.patched srsenb/src/stack/rrc/rrc.cc
+RUN grep -q 's1ap->track_rnti' srsenb/src/stack/rrc/rrc.cc || (echo 'ERROR: rcc patch not applied!' && exit 1)
+COPY rrc.h.patched srsenb/hdr/stack/rrc/rrc.h
+RUN grep -q 'has_user(uint16_t rnti)' srsenb/hdr/stack/rrc/rrc.h || (echo 'ERROR: rcc header patch not applied!' && exit 1)
+COPY rrc_ue.cc.patched srsenb/src/stack/rrc/rrc_ue.cc
+RUN grep -q 'ROGUE eNB IMSI CAPTURED]' srsenb/src/stack/rrc/rrc_ue.cc || (echo 'ERROR: rcc ue patch not applied!' && exit 1)
+COPY enb_s1ap_interfaces.h.patched lib/include/srsran/interfaces/enb_s1ap_interfaces.h 
+RUN grep -q 'release_rnti' lib/include/srsran/interfaces/enb_s1ap_interfaces.h || (echo 'ERROR: s1ap interface patch not applied!' && exit 1)
+COPY enb_rrc_interface_s1ap.h.patched lib/include/srsran/interfaces/enb_rrc_interface_s1ap.h
+RUN grep -q 'has_user(uint16_t rnti)' lib/include/srsran/interfaces/enb_rrc_interface_s1ap.h || (echo 'ERROR: rcc interface patch not applied!' && exit 1)
+COPY test_helpers.h.patched srsenb/test/rrc/test_helpers.h
+RUN grep -q 'track_rnti' srsenb/test/rrc/test_helpers.h || (echo 'ERROR: s1ap test helper patch not applied!' && exit 1)
+COPY dummy_classes.h.patched srsenb/test/common/dummy_classes.h
+RUN grep -q 'has_user(uint16_t rnti)' srsenb/test/common/dummy_classes.h|| (echo 'ERROR: dummy test helper patch not applied!' && exit 1)
+
+
+# Build srsRAN 4G
+RUN mkdir build && \
+    cd build && \
+    cmake ../ -DENABLE_TESTS=OFF -DENABLE_DOC=OFF -DENABLE_EXAMPLES=OFF -DENABLE_ZMQ=ON -DENABLE_SRSUE=ON -DENABLE_SRSENB=ON -DENABLE_SRSEPC=ON && \
+    make -j$(nproc)
+
+# Update dynamic linker
+RUN ldconfig
+
+# Copy the built binaries to /usr/local/bin
+RUN cd build && make install && \
+./srsran_install_configs.sh user
+
+# Update dynamic linker
+RUN ldconfig
+
+# Run commands with line buffered standard output
+ENTRYPOINT [ "stdbuf", "-o", "L" ]

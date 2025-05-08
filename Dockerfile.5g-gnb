@@ -1,0 +1,48 @@
+##################
+# Stage 1: Build #
+##################
+FROM ubuntu:24.04 AS deps
+
+RUN apt update && apt-get install -y \
+    --no-install-recommends \
+    git git-lfs ca-certificates \
+    libzmq3-dev cmake make gcc g++ pkg-config libfftw3-dev libmbedtls-dev libsctp-dev libyaml-cpp-dev libgtest-dev \
+    bsdmainutils && \
+    apt-get autoremove && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srsran
+
+# need to use this branch as it works locally
+RUN git clone https://github.com/srsran/srsRAN_Project.git
+WORKDIR /srsran/srsRAN_Project
+
+RUN git checkout 9d5dd742a7
+
+# Stage 2: Build with patch
+FROM deps AS build-normal
+
+RUN rm -rf build && \
+    mkdir build && \
+    cd build && \
+    cmake ../ -DENABLE_MKL=Off -DENABLE_ARMPL=Off -DENABLE_ZEROMQ=On -DENABLE_EXPORT=On -DENABLE_UHD=Off -DBUILD_TESTS=Off -DMARCH=native && \
+    make -j$(nproc)
+
+# Update dynamic linker
+RUN ldconfig
+
+# Copy the built binaries to /usr/local/bin
+RUN cd build && make install
+
+RUN DEBIAN_FRONTEND=noninteractive apt update && apt-get install -y --no-install-recommends netcat-openbsd \
+    net-tools tcpdump iputils-ping gettext socat less gnuradio coreutils && \
+    apt-get autoremove && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN ldconfig
+
+# ADD entrypoint-gnb.sh /entrypoint-gnb.sh
+# RUN chmod +x /entrypoint-gnb.sh
+# ADD gnb_config.template.yml gnb_config.template.yml
+
+# ENTRYPOINT [ "/entrypoint-gnb.sh" ]
+
+ENTRYPOINT ["stdbuf", "-oL", "-eL"]
