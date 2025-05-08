@@ -1,0 +1,9 @@
+FROM debian:stable-slim
+
+RUN apt-get update && \
+    apt-get install -y socat tcpdump net-tools iputils-ping \
+    kmod && \
+    apt-get clean
+
+# Entrypoint will be set by docker-compose command override
+CMD [ "sleep", "infinity" ]

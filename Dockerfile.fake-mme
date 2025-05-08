@@ -1,0 +1,13 @@
+# Dockerfile for fake MME stub
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1
+
+RUN apt update && apt install -y net-tools tcpdump iputils-ping procps
+
+WORKDIR /app
+
+COPY fake_mme_stub.py fake-mme.py
+
+ENTRYPOINT [ "python3", "-u", "fake-mme.py"]
+
